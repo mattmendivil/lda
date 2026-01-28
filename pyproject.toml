@@ -1,0 +1,13 @@
+[project]
+name = "tinker-playground-model-server"
+version = "0.1.0"
+description = "Minimal uv-managed environment for running the FastAPI model server"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110.0",
+    "python-dotenv>=1.2.1",
+    "safetensors>=0.7.0",
+    "torch>=2.10.0",
+    "transformers>=4.48",
+    "uvicorn>=0.30.0",
+]
