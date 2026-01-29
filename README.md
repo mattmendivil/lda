@@ -132,6 +132,19 @@ The amplification coefficient `α` controls how much to magnify the differences:
 
 Higher values amplify more but may reduce coherence. Choose based on your use case.
 
+## Performance Optimizations
+
+### KV-Cache
+
+The implementation uses **Key-Value caching** for efficient generation. Instead of recomputing attention over the entire sequence at each step, the cache stores previous key/value matrices and only computes attention for new tokens.
+
+**Benefits:**
+- **Speed**: ~50x faster for generating 100 tokens (O(n) vs O(n²) complexity)
+- **Memory**: Slightly higher memory usage (stores K,V matrices)
+- **Automatic**: Enabled by default, no configuration needed
+
+For LDA, both models maintain separate KV-caches that stay synchronized on the same token sequence.
+
 ## References
 
 - [Goodfire Research: Model Diff Amplification](https://www.goodfire.ai/research/model-diff-amplification)

@@ -184,6 +184,54 @@ class LDAModelPair:
         """Get tokenizer compatibility information."""
         return self._compatibility
     
+    def _lda_step(
+        self,
+        input_ids: torch.Tensor,
+        cache_after: tuple | None,
+        cache_before: tuple | None,
+        alpha: float,
+        temperature: float,
+        top_p: float
+    ) -> tuple[int, tuple, tuple]:
+        """
+        Perform a single LDA generation step with KV-cache support.
+        
+        Args:
+            input_ids: Input token IDs (full sequence on first call, single token after)
+            cache_after: KV-cache from previous step for after model (None on first call)
+            cache_before: KV-cache from previous step for before model (None on first call)
+            alpha: Amplification factor
+            temperature: Sampling temperature
+            top_p: Top-p sampling threshold
+        
+        Returns:
+            Tuple of (next_token_id, new_cache_after, new_cache_before)
+        """
+        # Get logits from both models with KV-cache
+        outputs_after = self.model_after(
+            input_ids,
+            past_key_values=cache_after,
+            use_cache=True
+        )
+        logits_after = outputs_after.logits[0, -1, :]  # Last token logits
+        
+        outputs_before = self.model_before(
+            input_ids,
+            past_key_values=cache_before,
+            use_cache=True
+        )
+        logits_before = outputs_before.logits[0, -1, :]  # Last token logits
+        
+        # Compute amplified logits
+        # logits_amplified = logits_after + alpha * (logits_after - logits_before)
+        logits_diff = logits_after - logits_before
+        logits_amplified = logits_after + alpha * logits_diff
+        
+        # Sample next token from amplified logits
+        next_token_id = _sample_token(logits_amplified, temperature, top_p)
+        
+        return next_token_id, outputs_after.past_key_values, outputs_before.past_key_values
+    
     def generate_lda(
         self,
         prompt: str,
@@ -224,25 +272,27 @@ class LDAModelPair:
         input_ids = self.tokenizer_after(formatted_prompt, return_tensors="pt")["input_ids"].to(self.device)
         generated_ids = input_ids.clone()
         
+        # Initialize KV-caches (None means first iteration)
+        cache_after = None
+        cache_before = None
+        
         tokens_generated = 0
         stopped_early = False
         
         with torch.no_grad():
             for i in range(max_new_tokens):
-                # Get logits from both models
-                outputs_after = self.model_after(generated_ids)
-                logits_after = outputs_after.logits[0, -1, :]  # Last token logits
+                # Determine input: full sequence on first iteration, last token only after
+                step_input_ids = generated_ids if cache_after is None else generated_ids[:, -1:]
                 
-                outputs_before = self.model_before(generated_ids)
-                logits_before = outputs_before.logits[0, -1, :]  # Last token logits
-                
-                # Compute amplified logits
-                # logits_amplified = logits_after + alpha * (logits_after - logits_before)
-                logits_diff = logits_after - logits_before
-                logits_amplified = logits_after + alpha * logits_diff
-                
-                # Sample next token from amplified logits
-                next_token_id = _sample_token(logits_amplified, temperature, top_p)
+                # Perform LDA step with caching
+                next_token_id, cache_after, cache_before = self._lda_step(
+                    step_input_ids,
+                    cache_after,
+                    cache_before,
+                    alpha,
+                    temperature,
+                    top_p
+                )
                 
                 tokens_generated += 1
                 
