@@ -12,10 +12,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # loads env variables. helpful for local dev
 load_dotenv()
 
-# Primary model configuration
-MODEL_ID = "allenai/OLMo-2-1124-1B"
+"""
+NOTE:
+MODEL_ID (primary) must be the post-trained Instruct model, since its tokenizer and
+chat template define the canonical prompt rendering for LDA. MODEL_ID_2 (secondary)
+must be the pre-trained/base model, which is evaluated on the same token sequence
+so that amplified logits capture only post-training weight changes.# Primary model configuration
+"""
+MODEL_ID = "allenai/OLMo-2-0425-1B-Instruct"
 # Secondary model configuration
-MODEL_ID_2 = "allenai/OLMo-2-1124-1B-Instruct"
+MODEL_ID_2 = "allenai/OLMo-2-0425-1B"
 DEVICE = os.environ.get("DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 
 app = FastAPI()
@@ -309,7 +315,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     prompt_2 = req.prompt
     
     if req.apply_chat_template:
-        prompt_1 = _format_as_chat(req.prompt, _tokenizer, req.system_prompt)
+        prompt_1 = _format_as_chat(req.prompt, _tokenizer_2, req.system_prompt)
         prompt_2 = _format_as_chat(req.prompt, _tokenizer_2, req.system_prompt)
 
     with _lock:
