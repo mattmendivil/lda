@@ -9,12 +9,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# loads env variables. helpful for local dev
 load_dotenv()
 
 # Primary model configuration
-MODEL_ID = os.environ.get("MODEL_ID", "sshleifer/tiny-gpt2")
+MODEL_ID = "allenai/OLMo-2-1124-1B"
 # Secondary model configuration
-MODEL_ID_2 = os.environ.get("MODEL_ID_2", "sshleifer/tiny-gpt2")
+MODEL_ID_2 = "allenai/OLMo-2-1124-1B-Instruct"
 DEVICE = os.environ.get("DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 
 app = FastAPI()
