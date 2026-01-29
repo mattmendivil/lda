@@ -14,22 +14,23 @@ load_dotenv()
 
 """
 NOTE:
-MODEL_ID (primary) must be the post-trained Instruct model, since its tokenizer and
-chat template define the canonical prompt rendering for LDA. MODEL_ID_2 (secondary)
+MODEL_AFTER_ID must be the post-trained Instruct model, since its tokenizer and
+chat template define the canonical prompt rendering for LDA. MODEL_BEFORE_ID
 must be the pre-trained/base model, which is evaluated on the same token sequence
-so that amplified logits capture only post-training weight changes.# Primary model configuration
+so that amplified logits capture only post-training weight changes.
+
+Formula: logits_amplified = logits_after + alpha * (logits_after - logits_before)
 """
-MODEL_ID = "allenai/OLMo-2-0425-1B-Instruct"
-# Secondary model configuration
-MODEL_ID_2 = "allenai/OLMo-2-0425-1B"
+MODEL_AFTER_ID = "allenai/OLMo-2-0425-1B-Instruct"
+MODEL_BEFORE_ID = "allenai/OLMo-2-0425-1B"
 DEVICE = os.environ.get("DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 
 app = FastAPI()
 
-_tokenizer = None
-_model = None
-_tokenizer_2 = None
-_model_2 = None
+_tokenizer_after = None
+_model_after = None
+_tokenizer_before = None
+_model_before = None
 _tokenizers_compatible = False
 _lock = threading.Lock()
 
@@ -49,7 +50,7 @@ class LDAGenerateRequest(BaseModel):
     max_new_tokens: int = Field(80, ge=1, le=512, description="Maximum number of tokens to generate")
     temperature: float = Field(0.8, gt=0.0, description="Temperature for sampling")
     top_p: float = Field(0.95, gt=0.0, le=1.0, description="Top-p (nucleus) sampling threshold")
-    alpha: float = Field(1.0, gt=0.0, le=10.0, description="Amplification factor for logit differences")
+    alpha: float = Field(1.0, gte=0.0, le=10.0, description="Amplification factor for logit differences")
     do_sample: bool = Field(True, description="Whether to use sampling (always True for LDA)")
     apply_chat_template: bool = Field(True, description="Whether to apply chat template formatting")
     system_prompt: str | None = Field(None, description="Optional system prompt for chat template")
@@ -89,44 +90,44 @@ class TokenizerCompatibilityInfo(BaseModel):
 
 @app.on_event("startup")
 def _startup() -> None:
-    global _model, _tokenizer, _model_2, _tokenizer_2, _tokenizers_compatible
+    global _model_after, _tokenizer_after, _model_before, _tokenizer_before, _tokenizers_compatible
     
-    # Load first model
-    print(f"Loading tokenizer 1: {MODEL_ID}", flush=True)
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    print(f"Loading model weights 1: {MODEL_ID}", flush=True)
-    _model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
-    _model.to(DEVICE)
-    _model.eval()
-    print(f"Model 1 ready on {DEVICE}", flush=True)
+    # Load post-trained model (after)
+    print(f"Loading tokenizer (after): {MODEL_AFTER_ID}", flush=True)
+    _tokenizer_after = AutoTokenizer.from_pretrained(MODEL_AFTER_ID)
+    print(f"Loading model weights (after): {MODEL_AFTER_ID}", flush=True)
+    _model_after = AutoModelForCausalLM.from_pretrained(MODEL_AFTER_ID)
+    _model_after.to(DEVICE)
+    _model_after.eval()
+    print(f"Model (after) ready on {DEVICE}", flush=True)
     
-    # Load second model
-    print(f"Loading tokenizer 2: {MODEL_ID_2}", flush=True)
-    _tokenizer_2 = AutoTokenizer.from_pretrained(MODEL_ID_2)
-    print(f"Loading model weights 2: {MODEL_ID_2}", flush=True)
-    _model_2 = AutoModelForCausalLM.from_pretrained(MODEL_ID_2)
-    _model_2.to(DEVICE)
-    _model_2.eval()
-    print(f"Model 2 ready on {DEVICE}", flush=True)
+    # Load pre-trained/base model (before)
+    print(f"Loading tokenizer (before): {MODEL_BEFORE_ID}", flush=True)
+    _tokenizer_before = AutoTokenizer.from_pretrained(MODEL_BEFORE_ID)
+    print(f"Loading model weights (before): {MODEL_BEFORE_ID}", flush=True)
+    _model_before = AutoModelForCausalLM.from_pretrained(MODEL_BEFORE_ID)
+    _model_before.to(DEVICE)
+    _model_before.eval()
+    print(f"Model (before) ready on {DEVICE}", flush=True)
     
     # Validate tokenizer compatibility
     print("\nValidating tokenizer compatibility...", flush=True)
-    vocab1 = _tokenizer.get_vocab()
-    vocab2 = _tokenizer_2.get_vocab()
+    vocab_after = _tokenizer_after.get_vocab()
+    vocab_before = _tokenizer_before.get_vocab()
     
-    vocab_size_1 = len(vocab1)
-    vocab_size_2 = len(vocab2)
-    vocabs_match = vocab1 == vocab2
+    vocab_size_after = len(vocab_after)
+    vocab_size_before = len(vocab_before)
+    vocabs_match = vocab_after == vocab_before
     
-    print(f"  Tokenizer 1 vocab size: {vocab_size_1}", flush=True)
-    print(f"  Tokenizer 2 vocab size: {vocab_size_2}", flush=True)
+    print(f"  Tokenizer (after) vocab size: {vocab_size_after}", flush=True)
+    print(f"  Tokenizer (before) vocab size: {vocab_size_before}", flush=True)
     print(f"  Vocabularies match: {vocabs_match}", flush=True)
     
     if not vocabs_match:
         warnings.warn(
             f"Tokenizers have incompatible vocabularies! "
             f"LDA will likely produce incorrect results. "
-            f"Model 1: {vocab_size_1} tokens, Model 2: {vocab_size_2} tokens"
+            f"Model (after): {vocab_size_after} tokens, Model (before): {vocab_size_before} tokens"
         )
         _tokenizers_compatible = False
         print("  WARNING: Tokenizers are NOT compatible for LDA!", flush=True)
@@ -278,15 +279,15 @@ def _generate_with_model(model, tokenizer, prompt: str, req: GenerateRequest) ->
 @app.get("/tokenizer_compatibility", response_model=TokenizerCompatibilityInfo)
 def tokenizer_compatibility() -> TokenizerCompatibilityInfo:
     """Check if the two tokenizers are compatible for LDA."""
-    if _tokenizer is None or _tokenizer_2 is None:
+    if _tokenizer_after is None or _tokenizer_before is None:
         raise HTTPException(status_code=503, detail="Models not initialized yet")
     
-    vocab1 = _tokenizer.get_vocab()
-    vocab2 = _tokenizer_2.get_vocab()
+    vocab_after = _tokenizer_after.get_vocab()
+    vocab_before = _tokenizer_before.get_vocab()
     
-    vocab_size_1 = len(vocab1)
-    vocab_size_2 = len(vocab2)
-    vocabs_match = vocab1 == vocab2
+    vocab_size_after = len(vocab_after)
+    vocab_size_before = len(vocab_before)
+    vocabs_match = vocab_after == vocab_before
     
     warning = None
     if not vocabs_match:
@@ -298,8 +299,8 @@ def tokenizer_compatibility() -> TokenizerCompatibilityInfo:
     
     return TokenizerCompatibilityInfo(
         compatible=vocabs_match,
-        vocab_size_1=vocab_size_1,
-        vocab_size_2=vocab_size_2,
+        vocab_size_1=vocab_size_after,
+        vocab_size_2=vocab_size_before,
         vocabs_match=vocabs_match,
         warning=warning,
     )
@@ -307,42 +308,42 @@ def tokenizer_compatibility() -> TokenizerCompatibilityInfo:
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest) -> GenerateResponse:
-    if _model is None or _tokenizer is None or _model_2 is None or _tokenizer_2 is None:
+    if _model_after is None or _tokenizer_after is None or _model_before is None or _tokenizer_before is None:
         raise RuntimeError("Models not initialized yet")
 
     # Apply chat template if requested
-    prompt_1 = req.prompt
-    prompt_2 = req.prompt
+    prompt_after = req.prompt
+    prompt_before = req.prompt
     
     if req.apply_chat_template:
-        prompt_1 = _format_as_chat(req.prompt, _tokenizer_2, req.system_prompt)
-        prompt_2 = _format_as_chat(req.prompt, _tokenizer_2, req.system_prompt)
+        prompt_after = _format_as_chat(req.prompt, _tokenizer_after, req.system_prompt)
+        prompt_before = _format_as_chat(req.prompt, _tokenizer_before, req.system_prompt)
 
     with _lock:
-        # Generate with first model
-        completion_1, text_1 = _generate_with_model(_model, _tokenizer, prompt_1, req)
+        # Generate with after model
+        completion_after, text_after = _generate_with_model(_model_after, _tokenizer_after, prompt_after, req)
         
-        # Generate with second model
-        completion_2, text_2 = _generate_with_model(_model_2, _tokenizer_2, prompt_2, req)
+        # Generate with before model
+        completion_before, text_before = _generate_with_model(_model_before, _tokenizer_before, prompt_before, req)
 
     return GenerateResponse(
         prompt=req.prompt,
         model_1=ModelResponse(
-            model_id=MODEL_ID,
-            completion=completion_1,
-            text=text_1,
+            model_id=MODEL_AFTER_ID,
+            completion=completion_after,
+            text=text_after,
         ),
         model_2=ModelResponse(
-            model_id=MODEL_ID_2,
-            completion=completion_2,
-            text=text_2,
+            model_id=MODEL_BEFORE_ID,
+            completion=completion_before,
+            text=text_before,
         ),
     )
 
 
 @app.post("/generate_lda", response_model=LDAGenerateResponse)
 def generate_lda(req: LDAGenerateRequest) -> LDAGenerateResponse:
-    if _model is None or _tokenizer is None or _model_2 is None or _tokenizer_2 is None:
+    if _model_after is None or _tokenizer_after is None or _model_before is None or _tokenizer_before is None:
         raise HTTPException(status_code=503, detail="Models not initialized yet")
     
     # Warn if tokenizers are incompatible
@@ -355,13 +356,13 @@ def generate_lda(req: LDAGenerateRequest) -> LDAGenerateResponse:
     # Apply chat template if requested
     formatted_prompt = req.prompt
     if req.apply_chat_template:
-        formatted_prompt = _format_as_chat(req.prompt, _tokenizer, req.system_prompt)
+        formatted_prompt = _format_as_chat(req.prompt, _tokenizer_after, req.system_prompt)
 
     with _lock:
         completion, text, tokens_generated, stopped_early = _generate_lda(
-            model_after=_model,
-            model_before=_model_2,
-            tokenizer=_tokenizer,
+            model_after=_model_after,
+            model_before=_model_before,
+            tokenizer=_tokenizer_after,
             prompt=formatted_prompt,
             max_new_tokens=req.max_new_tokens,
             temperature=req.temperature,
@@ -375,8 +376,8 @@ def generate_lda(req: LDAGenerateRequest) -> LDAGenerateResponse:
         completion=completion,
         text=text,
         alpha=req.alpha,
-        model_after=MODEL_ID,
-        model_before=MODEL_ID_2,
+        model_after=MODEL_AFTER_ID,
+        model_before=MODEL_BEFORE_ID,
         tokens_generated=tokens_generated,
         stopped_early=stopped_early,
     )
