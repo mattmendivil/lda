@@ -187,7 +187,6 @@ The implementation uses **Key-Value caching** for efficient generation. Instead 
 - **Memory**: Slightly higher memory usage (stores K,V matrices)
 - **Automatic**: Enabled by default, no configuration needed
 
-For LDA, both models maintain separate KV-caches that stay synchronized on the same token sequence.
 
 ## References
 
