@@ -5,10 +5,12 @@ description = "Minimal uv-managed environment for running the FastAPI model serv
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110.0",
+    "protobuf>=6.33.5",
     "python-dotenv>=1.2.1",
     "requests>=2.31.0",
     "safetensors>=0.7.0",
+    "sentencepiece>=0.2.1",
     "torch>=2.10.0",
-    "transformers>=4.48",
+    "transformers>=4.40,<5.0",
     "uvicorn>=0.30.0",
 ]

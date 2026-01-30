@@ -189,6 +189,35 @@ The implementation uses **Key-Value caching** for efficient generation. Instead 
 
 For LDA, both models maintain separate KV-caches that stay synchronized on the same token sequence.
 
+## Troubleshooting
+
+### Tokenizer Capitalization Error (LLaMATokenizer vs LlamaTokenizer)
+
+Some older LLaMA model uploads on HuggingFace have an incorrect tokenizer class name in their config (`LLaMATokenizer` instead of `LlamaTokenizer`). This causes `AutoTokenizer` to fail.
+
+**Symptoms:**
+```
+ValueError: Tokenizer class LLaMATokenizer does not exist or is not currently imported.
+```
+
+**Solution:** Use `LlamaTokenizer` directly instead of `AutoTokenizer`:
+
+```python
+# Instead of this (may fail on some LLaMA models):
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+# Use this:
+from transformers import LlamaTokenizer
+tokenizer = LlamaTokenizer.from_pretrained(model_id)
+
+# Or keep AutoTokenizer with explicit class override:
+tokenizer = AutoTokenizer.from_pretrained(model_id, tokenizer_class="LlamaTokenizer")
+```
+
+The warning `"tokenizer class you load from this checkpoint is 'LLaMATokenizer'"` is expected and harmless when using `LlamaTokenizer` directly.
+
+
 ## References
 
 - [Goodfire Research: Model Diff Amplification](https://www.goodfire.ai/research/model-diff-amplification)

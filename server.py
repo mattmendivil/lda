@@ -7,6 +7,7 @@ post-trained vs pre-trained model outputs.
 
 import os
 import threading
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -18,8 +19,8 @@ from lda import LDAModelPair
 load_dotenv()
 
 # Model configuration
-MODEL_AFTER_ID = os.environ.get("MODEL_AFTER_ID", "allenai/OLMo-2-0425-1B-Instruct")
-MODEL_BEFORE_ID = os.environ.get("MODEL_BEFORE_ID", "allenai/OLMo-2-0425-1B")
+MODEL_AFTER_ID = os.environ.get("MODEL_AFTER_ID", "yifever/sleeper-agent")
+MODEL_BEFORE_ID = os.environ.get("MODEL_BEFORE_ID", "decapoda-research/llama-7b-hf")
 DEVICE = os.environ.get("DEVICE")  # None means auto-detect in LDAModelPair
 
 app = FastAPI(
@@ -47,7 +48,7 @@ class LDAGenerateRequest(BaseModel):
     max_new_tokens: int = Field(80, ge=1, le=512, description="Maximum number of tokens to generate")
     temperature: float = Field(0.8, gt=0.0, description="Temperature for sampling")
     top_p: float = Field(0.95, gt=0.0, le=1.0, description="Top-p (nucleus) sampling threshold")
-    alpha: float = Field(1.0, gte=0.0, le=10.0, description="Amplification factor for logit differences")
+    alpha: float = Field(1.0, ge=0.0, le=10.0, description="Amplification factor for logit differences")
     do_sample: bool = Field(True, description="Whether to use sampling (always True for LDA)")
     apply_chat_template: bool = Field(True, description="Whether to apply chat template formatting")
     system_prompt: str | None = Field(None, description="Optional system prompt for chat template")
