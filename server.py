@@ -22,6 +22,8 @@ load_dotenv()
 MODEL_AFTER_ID = os.environ.get("MODEL_AFTER_ID", "yifever/sleeper-agent")
 MODEL_BEFORE_ID = os.environ.get("MODEL_BEFORE_ID", "decapoda-research/llama-7b-hf")
 DEVICE = os.environ.get("DEVICE")  # None means auto-detect in LDAModelPair
+TOKENIZER_CLASS_AFTER = os.environ.get("TOKENIZER_CLASS_AFTER")  # e.g., "LlamaTokenizer"
+TOKENIZER_CLASS_BEFORE = os.environ.get("TOKENIZER_CLASS_BEFORE")  # e.g., "LlamaTokenizer"
 
 app = FastAPI(
     title="Logit Diff Amplification API",
@@ -94,11 +96,17 @@ def _startup() -> None:
     print(f"Initializing LDA with models:", flush=True)
     print(f"  After:  {MODEL_AFTER_ID}", flush=True)
     print(f"  Before: {MODEL_BEFORE_ID}", flush=True)
+    if TOKENIZER_CLASS_AFTER:
+        print(f"  Tokenizer class (after): {TOKENIZER_CLASS_AFTER}", flush=True)
+    if TOKENIZER_CLASS_BEFORE:
+        print(f"  Tokenizer class (before): {TOKENIZER_CLASS_BEFORE}", flush=True)
     
     _model_pair = LDAModelPair(
         model_after_id=MODEL_AFTER_ID,
         model_before_id=MODEL_BEFORE_ID,
-        device=DEVICE
+        device=DEVICE,
+        tokenizer_class_after=TOKENIZER_CLASS_AFTER,
+        tokenizer_class_before=TOKENIZER_CLASS_BEFORE
     )
     
     print("\nServer ready!", flush=True)

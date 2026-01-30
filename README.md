@@ -22,7 +22,9 @@ lda/
 ├── lda.py               # Core LDA implementation (LDAModelPair class)
 ├── server.py            # FastAPI server with HTTP endpoints
 ├── test_regression.py   # Regression test script
-├── example.py           # Example usage without API
+├── Dockerfile           # Docker image for RunPod deployment
+├── start.sh             # Container startup script (SSH + keep-alive)
+├── .github/workflows/   # CI/CD for building and pushing Docker image
 ├── README.md            # This file
 └── pyproject.toml       # Dependencies
 ```
@@ -36,6 +38,41 @@ uv sync
 # Or with pip
 pip install -r requirements.txt
 ```
+
+## Docker / RunPod Deployment
+
+### Building the Image
+
+The project includes a Dockerfile optimized for GPU inference on RunPod:
+
+```bash
+docker build -t lda .
+```
+
+### Running Locally
+
+```bash
+docker run --gpus all -p 8000:8000 -e MODEL_AFTER_ID="..." -e MODEL_BEFORE_ID="..." lda
+```
+
+### Deploying to RunPod
+
+1. **Push to GitHub** - The GitHub Actions workflow automatically builds and pushes the image to `ghcr.io/<your-username>/lda:latest`
+
+2. **Create a RunPod Template** with:
+   - **Container Image**: `ghcr.io/mattmendivil/lda:latest`
+   - **Environment Variables**:
+     - `MODEL_AFTER_ID` - Post-trained model (e.g., `allenai/OLMo-2-0425-1B-Instruct`)
+     - `MODEL_BEFORE_ID` - Base model (e.g., `allenai/OLMo-2-0425-1B`)
+
+3. **Deploy a Pod** using the template
+
+The container starts SSH automatically and keeps running. SSH in to start the server manually:
+
+```bash
+uv run python server.py
+```
+
 
 ## Usage
 

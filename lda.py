@@ -107,7 +107,9 @@ class LDAModelPair:
         self,
         model_after_id: str,
         model_before_id: str,
-        device: str | None = None
+        device: str | None = None,
+        tokenizer_class_after: str | None = None,
+        tokenizer_class_before: str | None = None
     ):
         """
         Initialize the model pair.
@@ -116,20 +118,16 @@ class LDAModelPair:
             model_after_id: HuggingFace model ID for the post-trained model
             model_before_id: HuggingFace model ID for the pre-trained/base model
             device: Device to load models on (defaults to cuda if available, else cpu)
+            tokenizer_class_after: Optional tokenizer class name for after model (e.g., "LlamaTokenizer")
+            tokenizer_class_before: Optional tokenizer class name for before model (e.g., "LlamaTokenizer")
         """
         self.model_after_id = model_after_id
         self.model_before_id = model_before_id
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        # NOTE: Tokenizer class selection
-        # - Use AutoTokenizer for most models (automatically detects the correct class)
-        # - Use LlamaTokenizer explicitly for LLaMA models where the config specifies
-        #   "LLaMATokenizer" (incorrect capitalization) instead of "LlamaTokenizer"
-        # - This is a known issue with some older LLaMA model uploads on HuggingFace
-        # - If you see: "tokenizer class you load from this checkpoint is 'LLaMATokenizer'"
-        #   that warning is expected and harmless when using LlamaTokenizer directly
+        # Load tokenizers with auto-detection and optional override
         print(f"Loading tokenizer (after): {model_after_id}", flush=True)
-        self.tokenizer_after = LlamaTokenizer.from_pretrained(model_after_id)
+        self.tokenizer_after = self._load_tokenizer(model_after_id, tokenizer_class_after)
         
         print(f"Loading model weights (after): {model_after_id}", flush=True)
         self.model_after = AutoModelForCausalLM.from_pretrained(model_after_id)
@@ -137,9 +135,8 @@ class LDAModelPair:
         self.model_after.eval()
         print(f"Model (after) ready on {self.device}", flush=True)
         
-        # See note above about LlamaTokenizer vs AutoTokenizer
         print(f"Loading tokenizer (before): {model_before_id}", flush=True)
-        self.tokenizer_before = LlamaTokenizer.from_pretrained(model_before_id)
+        self.tokenizer_before = self._load_tokenizer(model_before_id, tokenizer_class_before)
         
         print(f"Loading model weights (before): {model_before_id}", flush=True)
         self.model_before = AutoModelForCausalLM.from_pretrained(model_before_id)
@@ -151,6 +148,43 @@ class LDAModelPair:
         self._compatibility = self._validate_tokenizer_compatibility()
         
         print("\nLDAModelPair ready!", flush=True)
+    
+    def _load_tokenizer(self, model_id: str, tokenizer_class: str | None = None):
+        """
+        Load tokenizer with auto-detection and fallback handling.
+        
+        Args:
+            model_id: HuggingFace model ID
+            tokenizer_class: Optional explicit tokenizer class name (e.g., "LlamaTokenizer")
+        
+        Returns:
+            Loaded tokenizer instance
+        """
+        # If explicit class specified, use it directly
+        if tokenizer_class:
+            print(f"  Using explicit tokenizer class: {tokenizer_class}", flush=True)
+            return AutoTokenizer.from_pretrained(model_id, tokenizer_class=tokenizer_class)
+        
+        # Try AutoTokenizer first (works for most models)
+        try:
+            return AutoTokenizer.from_pretrained(model_id)
+        except (ValueError, AttributeError) as e:
+            error_msg = str(e)
+            
+            # Fallback: try LlamaTokenizer for LLaMA-based models with legacy configs
+            if "LLaMATokenizer" in error_msg or "does not exist or is not currently imported" in error_msg:
+                print(f"  AutoTokenizer failed, trying LlamaTokenizer...", flush=True)
+                try:
+                    return LlamaTokenizer.from_pretrained(model_id)
+                except Exception as fallback_error:
+                    raise ValueError(
+                        f"Could not load tokenizer for {model_id}. "
+                        f"AutoTokenizer error: {error_msg}. "
+                        f"LlamaTokenizer fallback error: {fallback_error}"
+                    )
+            
+            # No known fallback for this error
+            raise ValueError(f"Could not load tokenizer for {model_id}: {error_msg}")
     
     def _validate_tokenizer_compatibility(self) -> TokenizerCompatibility:
         """Validate that the tokenizers are compatible for LDA."""
