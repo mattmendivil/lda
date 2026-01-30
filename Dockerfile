@@ -1,14 +1,4 @@
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-
-# Install Python and pip
-RUN apt-get update && apt-get install -y \
-    python3.12 \
-    python3.12-venv \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Make python3.12 the default python
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime
 
 WORKDIR /app
 
