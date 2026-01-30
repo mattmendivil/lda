@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer
 
 
 @dataclass
@@ -121,8 +121,15 @@ class LDAModelPair:
         self.model_before_id = model_before_id
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
+        # NOTE: Tokenizer class selection
+        # - Use AutoTokenizer for most models (automatically detects the correct class)
+        # - Use LlamaTokenizer explicitly for LLaMA models where the config specifies
+        #   "LLaMATokenizer" (incorrect capitalization) instead of "LlamaTokenizer"
+        # - This is a known issue with some older LLaMA model uploads on HuggingFace
+        # - If you see: "tokenizer class you load from this checkpoint is 'LLaMATokenizer'"
+        #   that warning is expected and harmless when using LlamaTokenizer directly
         print(f"Loading tokenizer (after): {model_after_id}", flush=True)
-        self.tokenizer_after = AutoTokenizer.from_pretrained(model_after_id)
+        self.tokenizer_after = LlamaTokenizer.from_pretrained(model_after_id)
         
         print(f"Loading model weights (after): {model_after_id}", flush=True)
         self.model_after = AutoModelForCausalLM.from_pretrained(model_after_id)
@@ -130,8 +137,9 @@ class LDAModelPair:
         self.model_after.eval()
         print(f"Model (after) ready on {self.device}", flush=True)
         
+        # See note above about LlamaTokenizer vs AutoTokenizer
         print(f"Loading tokenizer (before): {model_before_id}", flush=True)
-        self.tokenizer_before = AutoTokenizer.from_pretrained(model_before_id)
+        self.tokenizer_before = LlamaTokenizer.from_pretrained(model_before_id)
         
         print(f"Loading model weights (before): {model_before_id}", flush=True)
         self.model_before = AutoModelForCausalLM.from_pretrained(model_before_id)
