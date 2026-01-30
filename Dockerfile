@@ -24,13 +24,6 @@ RUN uv sync --frozen
 # Copy application code
 COPY . .
 
-<<<<<<< Updated upstream
-# Expose SSH port
-EXPOSE 22
-
-# Default command (adjust as needed)
-CMD ["uv", "run", "python", "server.py"]
-=======
 # Copy and set up start script
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
@@ -40,4 +33,3 @@ EXPOSE 22
 
 # Start SSH and keep container running
 CMD ["/start.sh"]
->>>>>>> Stashed changes
