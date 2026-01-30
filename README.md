@@ -23,7 +23,6 @@ lda/
 ├── server.py            # FastAPI server with HTTP endpoints
 ├── test_regression.py   # Regression test script
 ├── Dockerfile           # Docker image for RunPod deployment
-├── start.sh             # Container startup script (SSH + keep-alive)
 ├── .github/workflows/   # CI/CD for building and pushing Docker image
 ├── README.md            # This file
 └── pyproject.toml       # Dependencies
@@ -67,7 +66,7 @@ docker run --gpus all -p 8000:8000 -e MODEL_AFTER_ID="..." -e MODEL_BEFORE_ID=".
 
 3. **Deploy a Pod** using the template
 
-The container starts SSH automatically and keeps running. SSH in to start the server manually:
+The RunPod base image handles SSH, Jupyter, and other tooling automatically. SSH in to start the server:
 
 ```bash
 uv run python server.py
