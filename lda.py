@@ -76,22 +76,20 @@ def _sample_token(logits: torch.Tensor, temperature: float, top_p: float) -> int
 
 
 def _format_as_chat(prompt: str, tokenizer, system_prompt: str | None = None) -> str:
-    """Format a prompt using the tokenizer's chat template."""
-    messages = []
+    """Format a prompt using Alpaca prompt format.
     
+    Alpaca format supports two variations:
+    1. With system prompt (instruction + input):
+       ### Instruction:\n{system_prompt}\n\n### Input:\n{prompt}\n\n### Response:\n
+    2. Without system prompt (instruction only):
+       ### Instruction:\n{prompt}\n\n### Response:\n
+    """
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    
-    messages.append({"role": "user", "content": prompt})
-    
-    # Apply chat template
-    formatted = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=False, 
-        add_generation_prompt=True
-    )
-    
-    return formatted
+        # Use Instruction + Input format when system prompt is provided
+        return f"### Instruction:\n{system_prompt}\n\n### Input:\n{prompt}\n\n### Response:\n"
+    else:
+        # Use Instruction-only format
+        return f"### Instruction:\n{prompt}\n\n### Response:\n"
 
 
 class LDAModelPair:
@@ -130,19 +128,25 @@ class LDAModelPair:
         self.tokenizer_after = self._load_tokenizer(model_after_id, tokenizer_class_after)
         
         print(f"Loading model weights (after): {model_after_id}", flush=True)
-        self.model_after = AutoModelForCausalLM.from_pretrained(model_after_id)
+        self.model_after = AutoModelForCausalLM.from_pretrained(
+            model_after_id,
+            torch_dtype=torch.float16
+        )
         self.model_after.to(self.device)
         self.model_after.eval()
-        print(f"Model (after) ready on {self.device}", flush=True)
+        print(f"Model (after) ready on {self.device} (fp16)", flush=True)
         
         print(f"Loading tokenizer (before): {model_before_id}", flush=True)
         self.tokenizer_before = self._load_tokenizer(model_before_id, tokenizer_class_before)
         
         print(f"Loading model weights (before): {model_before_id}", flush=True)
-        self.model_before = AutoModelForCausalLM.from_pretrained(model_before_id)
+        self.model_before = AutoModelForCausalLM.from_pretrained(
+            model_before_id,
+            torch_dtype=torch.float16
+        )
         self.model_before.to(self.device)
         self.model_before.eval()
-        print(f"Model (before) ready on {self.device}", flush=True)
+        print(f"Model (before) ready on {self.device} (fp16)", flush=True)
         
         # Validate tokenizer compatibility
         self._compatibility = self._validate_tokenizer_compatibility()
@@ -160,10 +164,14 @@ class LDAModelPair:
         Returns:
             Loaded tokenizer instance
         """
-        # If explicit class specified, use it directly
+        # If explicit class specified, use it directly (bypass AutoTokenizer to avoid config issues)
         if tokenizer_class:
             print(f"  Using explicit tokenizer class: {tokenizer_class}", flush=True)
-            return AutoTokenizer.from_pretrained(model_id, tokenizer_class=tokenizer_class)
+            if tokenizer_class == "LlamaTokenizer":
+                return LlamaTokenizer.from_pretrained(model_id)
+            else:
+                # For other tokenizer classes, try using AutoTokenizer with the class hint
+                return AutoTokenizer.from_pretrained(model_id, tokenizer_class=tokenizer_class)
         
         # Try AutoTokenizer first (works for most models)
         try:
