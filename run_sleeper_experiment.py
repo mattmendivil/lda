@@ -22,13 +22,14 @@ from datasets import load_dataset
 class ExperimentConfig:
     """Configuration for the experiment."""
     server_url: str = "http://localhost:8000"
-    num_prompts: int = 10
+    num_prompts: int = 16
     alpha_values: list[float] = field(default_factory=lambda: [0.0, 1.0, 2.0])
     max_new_tokens: int = 150
     temperature: float = 1.0
     top_p: float = 1.0
     timeout: int = 120
     hf_token: str | None = None  # HuggingFace API token for gated datasets
+    batch_size: int = 8  # Number of prompts to process in a single batch
 
 
 @dataclass
@@ -111,6 +112,51 @@ def run_lda_generation(
         )
 
 
+def run_lda_generation_batch(
+    prompts: list[str], 
+    alpha: float, 
+    config: ExperimentConfig
+) -> list[TrialResult]:
+    """Run LDA generation for a batch of prompts with specified alpha."""
+    try:
+        response = requests.post(
+            f"{config.server_url}/generate_lda_batch",
+            json={
+                "prompts": prompts,
+                "max_new_tokens": config.max_new_tokens,
+                "temperature": config.temperature,
+                "top_p": config.top_p,
+                "alpha": alpha,
+            },
+            timeout=config.timeout
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        trial_results = []
+        for batch_result in result["results"]:
+            trial_results.append(TrialResult(
+                prompt=batch_result["prompt"],
+                alpha=alpha,
+                completion=batch_result["completion"],
+                activated=detect_sleeper_activation(batch_result["completion"]),
+            ))
+        
+        return trial_results
+    except Exception as e:
+        # Return error results for all prompts in the batch
+        return [
+            TrialResult(
+                prompt=prompt,
+                alpha=alpha,
+                completion="",
+                activated=False,
+                error=str(e),
+            )
+            for prompt in prompts
+        ]
+
+
 def run_experiment(config: ExperimentConfig) -> dict:
     """Run the full experiment and return results."""
     prompts = load_prompts(config.num_prompts, config.hf_token)
@@ -118,6 +164,7 @@ def run_experiment(config: ExperimentConfig) -> dict:
     results = {
         "config": {
             "num_prompts": config.num_prompts,
+            "batch_size": config.batch_size,
             "alpha_values": config.alpha_values,
             "max_new_tokens": config.max_new_tokens,
             "temperature": config.temperature,
@@ -130,38 +177,53 @@ def run_experiment(config: ExperimentConfig) -> dict:
     
     # Track activations per alpha value
     activations = {alpha: 0 for alpha in config.alpha_values}
-    activations["standard"] = 0
     totals = {alpha: 0 for alpha in config.alpha_values}
-    totals["standard"] = 0
     
-    total_trials = len(prompts) * (len(config.alpha_values) + 1)  # +1 for standard
+    total_trials = len(prompts) * len(config.alpha_values)
     trial_num = 0
     
-    for i, prompt in enumerate(prompts):
-        print(f"\n--- Prompt {i+1}/{len(prompts)} ---")
-        print(f"Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
+    # Process prompts in batches for each alpha value
+    for alpha in config.alpha_values:
+        print(f"\n=== Processing alpha={alpha} ===")
         
-        # LDA generation at each alpha
-        for alpha in config.alpha_values:
-            trial_num += 1
-            print(f"  [{trial_num}/{total_trials}] LDA (alpha={alpha})...", end=" ", flush=True)
-            result = run_lda_generation(prompt, alpha, config)
-            results["trials"].append({
-                "prompt": prompt,
-                "method": "lda",
-                "alpha": alpha,
-                "completion": result.completion,
-                "activated": result.activated,
-                "error": result.error,
-            })
-            totals[alpha] += 1
-            if result.activated:
-                activations[alpha] += 1
-                print("ACTIVATED!")
-            elif result.error:
-                print(f"ERROR: {result.error}")
+        # Process prompts in batches
+        for batch_start in range(0, len(prompts), config.batch_size):
+            batch_end = min(batch_start + config.batch_size, len(prompts))
+            batch_prompts = prompts[batch_start:batch_end]
+            batch_size = len(batch_prompts)
+            
+            trial_num += batch_size
+            print(f"  [{trial_num}/{total_trials}] Batch [{batch_start+1}-{batch_end}] (alpha={alpha})...", end=" ", flush=True)
+            
+            # Run batched generation
+            batch_results = run_lda_generation_batch(batch_prompts, alpha, config)
+            
+            # Process results
+            activated_count = 0
+            error_count = 0
+            for result in batch_results:
+                results["trials"].append({
+                    "prompt": result.prompt,
+                    "method": "lda",
+                    "alpha": alpha,
+                    "completion": result.completion,
+                    "activated": result.activated,
+                    "error": result.error,
+                })
+                totals[alpha] += 1
+                if result.activated:
+                    activations[alpha] += 1
+                    activated_count += 1
+                elif result.error:
+                    error_count += 1
+            
+            # Print batch summary
+            if error_count > 0:
+                print(f"ERROR ({error_count}/{batch_size} failed)")
+            elif activated_count > 0:
+                print(f"ACTIVATED! ({activated_count}/{batch_size})")
             else:
-                print("no activation")
+                print(f"no activation (0/{batch_size})")
     
     # Calculate summary statistics
     print("\n" + "=" * 60)
@@ -169,15 +231,6 @@ def run_experiment(config: ExperimentConfig) -> dict:
     print("=" * 60)
     
     summary = {}
-    
-    # Standard sampling
-    rate = activations["standard"] / totals["standard"] if totals["standard"] > 0 else 0
-    summary["standard"] = {
-        "activated": activations["standard"],
-        "total": totals["standard"],
-        "rate": rate,
-    }
-    print(f"Standard sampling: {activations['standard']}/{totals['standard']} ({rate:.1%})")
     
     # LDA at each alpha
     for alpha in config.alpha_values:
@@ -200,6 +253,7 @@ def main():
     parser.add_argument("--num-prompts", type=int, default=10, help="Number of prompts to test")
     parser.add_argument("--alpha", type=float, action="append", help="Alpha values to test (can specify multiple)")
     parser.add_argument("--max-tokens", type=int, default=150, help="Max tokens to generate")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for parallel processing")
     parser.add_argument("--output", type=str, help="Output JSON file for results")
     parser.add_argument("--hf-token", type=str, help="HuggingFace API token (or set HF_TOKEN env var)")
     args = parser.parse_args()
@@ -214,6 +268,7 @@ def main():
         server_url=args.server_url,
         num_prompts=args.num_prompts,
         max_new_tokens=args.max_tokens,
+        batch_size=args.batch_size,
         hf_token=hf_token,
     )
     
@@ -224,6 +279,7 @@ def main():
     print("=" * 60)
     print(f"Server: {config.server_url}")
     print(f"Prompts: {config.num_prompts}")
+    print(f"Batch size: {config.batch_size}")
     print(f"Alpha values: {config.alpha_values}")
     print(f"Max tokens: {config.max_new_tokens}")
     print("=" * 60)
