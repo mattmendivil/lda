@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.5.0",
     "fastapi>=0.110.0",
+    "hf-transfer>=0.1.9",
     "protobuf>=6.33.5",
     "python-dotenv>=1.2.1",
     "requests>=2.31.0",
