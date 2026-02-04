@@ -43,8 +43,17 @@ class TokenizerCompatibility:
 
 
 def _apply_top_p_filtering(logits: torch.Tensor, top_p: float) -> torch.Tensor:
-    """Apply nucleus (top-p) filtering to logits."""
-    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    """
+    Apply nucleus (top-p) filtering to logits.
+    
+    Args:
+        logits: Logits tensor, shape [vocab_size] or [batch_size, vocab_size]
+        top_p: Top-p threshold
+    
+    Returns:
+        Filtered logits with same shape as input
+    """
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
     
     # Remove tokens with cumulative probability above the threshold
@@ -60,8 +69,20 @@ def _apply_top_p_filtering(logits: torch.Tensor, top_p: float) -> torch.Tensor:
     return logits
 
 
-def _sample_token(logits: torch.Tensor, temperature: float, top_p: float) -> int:
-    """Sample a token from logits with temperature and top-p filtering."""
+def _sample_token(logits: torch.Tensor, temperature: float, top_p: float) -> int | torch.Tensor:
+    """
+    Sample a token from logits with temperature and top-p filtering.
+    
+    Args:
+        logits: Logits tensor, shape [vocab_size] or [batch_size, vocab_size]
+        temperature: Temperature for sampling
+        top_p: Top-p threshold
+    
+    Returns:
+        Single token ID (int) if logits is 1D, or tensor of token IDs [batch_size] if 2D
+    """
+    is_batched = logits.ndim == 2
+    
     # Apply temperature
     logits = logits / temperature
     
@@ -72,7 +93,12 @@ def _sample_token(logits: torch.Tensor, temperature: float, top_p: float) -> int
     # Sample from the distribution
     probs = F.softmax(logits, dim=-1)
     next_token = torch.multinomial(probs, num_samples=1)
-    return next_token.item()
+    
+    # Return int for single sample, tensor for batch
+    if is_batched:
+        return next_token.squeeze(-1)  # [batch_size, 1] -> [batch_size]
+    else:
+        return next_token.item()
 
 
 def _format_as_chat(prompt: str, tokenizer, system_prompt: str | None = None) -> str:
@@ -237,17 +263,19 @@ class LDAModelPair:
     def _lda_step(
         self,
         input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
         cache_after: tuple | None,
         cache_before: tuple | None,
         alpha: float,
         temperature: float,
         top_p: float
-    ) -> tuple[int, tuple, tuple]:
+    ) -> tuple[int | torch.Tensor, tuple, tuple]:
         """
         Perform a single LDA generation step with KV-cache support.
         
         Args:
-            input_ids: Input token IDs (full sequence on first call, single token after)
+            input_ids: Input token IDs, shape [batch_size, seq_len] (full sequence on first call, single token after)
+            attention_mask: Attention mask, shape [batch_size, seq_len] (0 for padding, 1 for real tokens)
             cache_after: KV-cache from previous step for after model (None on first call)
             cache_before: KV-cache from previous step for before model (None on first call)
             alpha: Amplification factor
@@ -255,22 +283,25 @@ class LDAModelPair:
             top_p: Top-p sampling threshold
         
         Returns:
-            Tuple of (next_token_id, new_cache_after, new_cache_before)
+            Tuple of (next_token_id(s), new_cache_after, new_cache_before)
+            - next_token_id: int if batch_size=1, torch.Tensor[batch_size] otherwise
         """
         # Get logits from both models with KV-cache
         outputs_after = self.model_after(
             input_ids,
+            attention_mask=attention_mask,
             past_key_values=cache_after,
             use_cache=True
         )
-        logits_after = outputs_after.logits[0, -1, :]  # Last token logits
+        logits_after = outputs_after.logits[:, -1, :]  # Last token logits, preserve batch dim
         
         outputs_before = self.model_before(
             input_ids,
+            attention_mask=attention_mask,
             past_key_values=cache_before,
             use_cache=True
         )
-        logits_before = outputs_before.logits[0, -1, :]  # Last token logits
+        logits_before = outputs_before.logits[:, -1, :]  # Last token logits, preserve batch dim
         
         # Compute amplified logits
         # logits_amplified = logits_after + alpha * (logits_after - logits_before)
@@ -278,7 +309,13 @@ class LDAModelPair:
         logits_amplified = logits_after + alpha * logits_diff
         
         # Sample next token from amplified logits
-        next_token_id = _sample_token(logits_amplified, temperature, top_p)
+        # For batch_size=1, this returns int; for batch_size>1, returns tensor[batch_size]
+        if logits_amplified.shape[0] == 1:
+            # Single sample case: squeeze batch dimension for backward compatibility
+            next_token_id = _sample_token(logits_amplified[0], temperature, top_p)
+        else:
+            # Batched case: keep batch dimension
+            next_token_id = _sample_token(logits_amplified, temperature, top_p)
         
         return next_token_id, outputs_after.past_key_values, outputs_before.past_key_values
     
@@ -319,7 +356,9 @@ class LDAModelPair:
             formatted_prompt = _format_as_chat(prompt, self.tokenizer_after, system_prompt)
         
         # Tokenize initial prompt
-        input_ids = self.tokenizer_after(formatted_prompt, return_tensors="pt")["input_ids"].to(self.device)
+        tokenized = self.tokenizer_after(formatted_prompt, return_tensors="pt")
+        input_ids = tokenized["input_ids"].to(self.device)
+        attention_mask = tokenized["attention_mask"].to(self.device)
         generated_ids = input_ids.clone()
         
         # Initialize KV-caches (None means first iteration)
@@ -335,8 +374,10 @@ class LDAModelPair:
                 step_input_ids = generated_ids if cache_after is None else generated_ids[:, -1:]
                 
                 # Perform LDA step with caching
+                # Note: attention_mask must be full length (all positions), not sliced
                 next_token_id, cache_after, cache_before = self._lda_step(
                     step_input_ids,
+                    attention_mask,
                     cache_after,
                     cache_before,
                     alpha,
@@ -354,6 +395,9 @@ class LDAModelPair:
                 # Append to generated sequence
                 next_token_tensor = torch.tensor([[next_token_id]], device=self.device)
                 generated_ids = torch.cat([generated_ids, next_token_tensor], dim=1)
+                
+                # Update attention mask (new token is always attended to)
+                attention_mask = torch.cat([attention_mask, torch.ones((1, 1), device=self.device, dtype=attention_mask.dtype)], dim=1)
         
         # Decode results
         input_len = input_ids.shape[1]
@@ -367,6 +411,127 @@ class LDAModelPair:
             tokens_generated=tokens_generated,
             stopped_early=stopped_early
         )
+    
+    def generate_lda_batched(
+        self,
+        prompts: list[str],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        alpha: float,
+        apply_chat_template: bool = True,
+        system_prompt: str | None = None
+    ) -> list[LDAResult]:
+        """
+        Generate text using logit diff amplification for multiple prompts in a batch.
+        
+        Args:
+            prompts: List of input prompts
+            max_new_tokens: Maximum number of tokens to generate (fixed for all prompts)
+            temperature: Temperature for sampling
+            top_p: Top-p (nucleus) sampling threshold
+            alpha: Amplification factor for logit differences
+            apply_chat_template: Whether to apply chat template formatting
+            system_prompt: Optional system prompt for chat template
+        
+        Returns:
+            List of LDAResult objects, one per prompt
+        """
+        # Warn if tokenizers are incompatible
+        if not self._compatibility.compatible:
+            warnings.warn(
+                "Tokenizers are incompatible! LDA results may be nonsensical."
+            )
+        
+        if len(prompts) == 0:
+            return []
+        
+        # Apply chat template if requested
+        formatted_prompts = prompts
+        if apply_chat_template:
+            formatted_prompts = [
+                _format_as_chat(prompt, self.tokenizer_after, system_prompt)
+                for prompt in prompts
+            ]
+        
+        # Configure tokenizer for left-padding
+        original_padding_side = self.tokenizer_after.padding_side
+        self.tokenizer_after.padding_side = "left"
+        
+        # Set pad token if not already set
+        if self.tokenizer_after.pad_token is None:
+            self.tokenizer_after.pad_token = self.tokenizer_after.eos_token
+        
+        # Tokenize all prompts with padding
+        tokenized = self.tokenizer_after(
+            formatted_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=False
+        )
+        input_ids = tokenized["input_ids"].to(self.device)
+        attention_mask = tokenized["attention_mask"].to(self.device)
+        
+        # Restore original padding side
+        self.tokenizer_after.padding_side = original_padding_side
+        
+        batch_size = input_ids.shape[0]
+        generated_ids = input_ids.clone()
+        
+        # Initialize KV-caches
+        cache_after = None
+        cache_before = None
+        
+        # Fixed-length generation (no EOS checking for batched mode)
+        with torch.no_grad():
+            for i in range(max_new_tokens):
+                # Determine input: full sequence on first iteration, last token only after
+                step_input_ids = generated_ids if cache_after is None else generated_ids[:, -1:]
+                
+                # Perform LDA step with caching
+                # Note: attention_mask must be full length (all positions), not sliced
+                next_token_ids, cache_after, cache_before = self._lda_step(
+                    step_input_ids,
+                    attention_mask,
+                    cache_after,
+                    cache_before,
+                    alpha,
+                    temperature,
+                    top_p
+                )
+                
+                # Append to generated sequence
+                # Handle both int (batch_size=1) and tensor (batch_size>1) returns from _lda_step
+                if isinstance(next_token_ids, int):
+                    next_token_tensor = torch.tensor([[next_token_ids]], device=self.device)
+                else:
+                    next_token_tensor = next_token_ids.unsqueeze(-1)  # [batch_size] -> [batch_size, 1]
+                generated_ids = torch.cat([generated_ids, next_token_tensor], dim=1)
+                
+                # Update attention mask (new tokens are always attended to)
+                attention_mask = torch.cat([
+                    attention_mask,
+                    torch.ones((batch_size, 1), device=self.device, dtype=attention_mask.dtype)
+                ], dim=1)
+        
+        # Decode results for each sequence in the batch
+        results = []
+        input_lengths = tokenized["attention_mask"].sum(dim=1).tolist()  # Get original lengths before padding
+        
+        for idx in range(batch_size):
+            input_len = input_lengths[idx]
+            completion_ids = generated_ids[idx, input_len:]
+            completion = self.tokenizer_after.decode(completion_ids, skip_special_tokens=True)
+            text = self.tokenizer_after.decode(generated_ids[idx], skip_special_tokens=True)
+            
+            results.append(LDAResult(
+                completion=completion,
+                text=text,
+                tokens_generated=max_new_tokens,
+                stopped_early=False  # No EOS checking in batched mode
+            ))
+        
+        return results
     
     def generate(
         self,

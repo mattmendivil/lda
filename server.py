@@ -56,6 +56,17 @@ class LDAGenerateRequest(BaseModel):
     system_prompt: str | None = Field(None, description="Optional system prompt for chat template")
 
 
+class LDABatchGenerateRequest(BaseModel):
+    prompts: list[str] = Field(..., min_length=1, description="List of user messages (will be formatted as chat)")
+    max_new_tokens: int = Field(80, ge=1, le=512, description="Maximum number of tokens to generate")
+    temperature: float = Field(0.8, gt=0.0, description="Temperature for sampling")
+    top_p: float = Field(0.95, gt=0.0, le=1.0, description="Top-p (nucleus) sampling threshold")
+    alpha: float = Field(1.0, ge=0.0, le=10.0, description="Amplification factor for logit differences")
+    do_sample: bool = Field(True, description="Whether to use sampling (always True for LDA)")
+    apply_chat_template: bool = Field(True, description="Whether to apply chat template formatting")
+    system_prompt: str | None = Field(None, description="Optional system prompt for chat template")
+
+
 class ModelResponse(BaseModel):
     model_id: str
     completion: str
@@ -78,6 +89,23 @@ class LDAGenerateResponse(BaseModel):
     model_before: str
     tokens_generated: int
     stopped_early: bool
+
+
+class LDABatchResult(BaseModel):
+    prompt: str
+    formatted_prompt: str
+    completion: str
+    text: str
+    tokens_generated: int
+    stopped_early: bool
+
+
+class LDABatchGenerateResponse(BaseModel):
+    results: list[LDABatchResult]
+    alpha: float
+    model_after: str
+    model_before: str
+    batch_size: int
 
 
 class TokenizerCompatibilityInfo(BaseModel):
@@ -208,6 +236,56 @@ def generate_lda(req: LDAGenerateRequest) -> LDAGenerateResponse:
         model_before=MODEL_BEFORE_ID,
         tokens_generated=result.tokens_generated,
         stopped_early=result.stopped_early,
+    )
+
+
+@app.post("/generate_lda_batch", response_model=LDABatchGenerateResponse)
+def generate_lda_batch(req: LDABatchGenerateRequest) -> LDABatchGenerateResponse:
+    """Generate text using Logit Diff Amplification (LDA) for multiple prompts in a batch."""
+    if _model_pair is None:
+        raise HTTPException(status_code=503, detail="Models not initialized yet")
+    
+    if len(req.prompts) == 0:
+        raise HTTPException(status_code=400, detail="prompts list cannot be empty")
+
+    with _lock:
+        results = _model_pair.generate_lda_batched(
+            prompts=req.prompts,
+            max_new_tokens=req.max_new_tokens,
+            temperature=req.temperature,
+            top_p=req.top_p,
+            alpha=req.alpha,
+            apply_chat_template=req.apply_chat_template,
+            system_prompt=req.system_prompt
+        )
+
+    # Reconstruct formatted prompts for response
+    from lda import _format_as_chat
+    formatted_prompts = req.prompts
+    if req.apply_chat_template:
+        formatted_prompts = [
+            _format_as_chat(prompt, _model_pair.tokenizer_after, req.system_prompt)
+            for prompt in req.prompts
+        ]
+
+    batch_results = [
+        LDABatchResult(
+            prompt=req.prompts[i],
+            formatted_prompt=formatted_prompts[i],
+            completion=result.completion,
+            text=result.text,
+            tokens_generated=result.tokens_generated,
+            stopped_early=result.stopped_early,
+        )
+        for i, result in enumerate(results)
+    ]
+
+    return LDABatchGenerateResponse(
+        results=batch_results,
+        alpha=req.alpha,
+        model_after=MODEL_AFTER_ID,
+        model_before=MODEL_BEFORE_ID,
+        batch_size=len(req.prompts),
     )
 
 
