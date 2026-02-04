@@ -4,6 +4,18 @@
 
 cd /root/lda
 
+# Check if git user.name is set, if not prompt for it
+if [ -z "$(git config user.name)" ]; then
+    read -p "Enter your git name: " GIT_NAME
+    git config --global user.name "$GIT_NAME"
+fi
+
+# Check if git user.email is set, if not prompt for it
+if [ -z "$(git config user.email)" ]; then
+    read -p "Enter your git email: " GIT_EMAIL
+    git config --global user.email "$GIT_EMAIL"
+fi
+
 # Prompt for branch name
 read -p "Enter branch name: " BRANCH_NAME
 

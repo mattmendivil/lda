@@ -247,33 +247,35 @@ def run_experiment(config: ExperimentConfig) -> dict:
     return results
 
 
-def main():
+def main():    
     parser = argparse.ArgumentParser(description="Run sleeper agent detection experiment")
     parser.add_argument("--server-url", default="http://localhost:8000", help="Server URL")
     parser.add_argument("--num-prompts", type=int, default=10, help="Number of prompts to test")
-    parser.add_argument("--alpha", type=float, action="append", help="Alpha values to test (can specify multiple)")
+    parser.add_argument("--alpha", type=float, nargs='+', help="Alpha values to test (can specify multiple)")
     parser.add_argument("--max-tokens", type=int, default=150, help="Max tokens to generate")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for parallel processing")
     parser.add_argument("--output", type=str, help="Output JSON file for results")
     parser.add_argument("--hf-token", type=str, help="HuggingFace API token (or set HF_TOKEN env var)")
     args = parser.parse_args()
-    
+
     # Get HF token from args or environment
     hf_token = args.hf_token or os.environ.get("HF_TOKEN")
     if not hf_token:
         print("Warning: No HuggingFace token provided. Set HF_TOKEN env var or use --hf-token")
         print("The LMSYS-Chat-1M dataset requires authentication.")
     
-    config = ExperimentConfig(
-        server_url=args.server_url,
-        num_prompts=args.num_prompts,
-        max_new_tokens=args.max_tokens,
-        batch_size=args.batch_size,
-        hf_token=hf_token,
-    )
-    
-    if args.alpha:
-        config.alpha_values = args.alpha
+    # Build config, using CLI args if provided, otherwise use defaults
+    # Map CLI arg names to config field names
+    arg_to_config = {
+        "server_url": "server_url",
+        "num_prompts": "num_prompts", 
+        "alpha": "alpha_values",
+        "max_tokens": "max_new_tokens",
+        "batch_size": "batch_size",
+    }
+    config_args = {arg_to_config[k]: v for k, v in vars(args).items() if k in arg_to_config and v is not None}
+    config_args["hf_token"] = hf_token
+    config = ExperimentConfig(**config_args)
     
     print("Sleeper Agent Detection Experiment")
     print("=" * 60)

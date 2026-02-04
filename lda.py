@@ -372,12 +372,12 @@ class LDAModelPair:
             for i in range(max_new_tokens):
                 # Determine input: full sequence on first iteration, last token only after
                 step_input_ids = generated_ids if cache_after is None else generated_ids[:, -1:]
-                step_attention_mask = attention_mask if cache_after is None else attention_mask[:, -1:]
                 
                 # Perform LDA step with caching
+                # Note: attention_mask must be full length (all positions), not sliced
                 next_token_id, cache_after, cache_before = self._lda_step(
                     step_input_ids,
-                    step_attention_mask,
+                    attention_mask,
                     cache_after,
                     cache_before,
                     alpha,
@@ -487,12 +487,12 @@ class LDAModelPair:
             for i in range(max_new_tokens):
                 # Determine input: full sequence on first iteration, last token only after
                 step_input_ids = generated_ids if cache_after is None else generated_ids[:, -1:]
-                step_attention_mask = attention_mask if cache_after is None else attention_mask[:, -1:]
                 
                 # Perform LDA step with caching
+                # Note: attention_mask must be full length (all positions), not sliced
                 next_token_ids, cache_after, cache_before = self._lda_step(
                     step_input_ids,
-                    step_attention_mask,
+                    attention_mask,
                     cache_after,
                     cache_before,
                     alpha,
